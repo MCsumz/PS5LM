@@ -212,7 +212,19 @@ void ps5lm_activity_begin(int id, const char * method, const char * path, const 
         g_ignored[id] = true;
         return;
     }
-    const json j = json::parse(body, body + body_len, nullptr, false);
+    // An image's data (an image_url's "url", an Anthropic or audio part's
+    // "data") is dropped as it is parsed: a chat sends its whole history with
+    // each request, images and all, and the feed only marks where they were.
+    std::string key;
+    const json::parser_callback_t skip_media = [&key](int, json::parse_event_t event, json & parsed) {
+        if (event == json::parse_event_t::key) {
+            key = parsed.get<std::string>();
+        } else if (event == json::parse_event_t::value && parsed.is_string() && (key == "url" || key == "data")) {
+            return parsed.get_ref<const std::string &>().size() < 4096;
+        }
+        return true;
+    };
+    const json j = json::parse(body, body + body_len, skip_media, false);
     const int questions = j.is_object() && j.contains("questions") && j["questions"].is_object() ? (int) j["questions"].size() : 0;
     g_sink->activity_begin(id, remote ? remote : "", path ? path : "", one_line(printable(asked_from(path ? path : "", j)), 400), questions);
 }
@@ -262,16 +274,16 @@ void ps5lm_activity_data(int id, const char * data, size_t len) {
 }
 
 void ps5lm_activity_end(int id, int status) {
+    bool ignored = false;
     {
         std::lock_guard<std::mutex> lock(g_mutex);
         g_partial.erase(id);
-        if (g_ignored.erase(id) != 0) {
-            return;
-        }
+        ignored = g_ignored.erase(id) != 0;
     }
-    if (g_sink) {
+    if (g_sink && !ignored) {
         g_sink->activity_end(id, status);
     }
+    ps5lm::memory_after_request(id);
 }
 
 }  // extern "C"

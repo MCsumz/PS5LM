@@ -190,6 +190,24 @@ for f in "${radv_link_flags[@]}"; do
     case $f in --defsym=getaddrinfo=*|--defsym=freeaddrinfo=*) ;; *) flags+=("$f") ;; esac
 done
 radv_link_flags=("${flags[@]}" --wrap=sceAgcInit)
+# The platform layer with patches/sdk applied, in place of the SDK's own
+# libps5platform.a: the title heap gives memory back (patches/sdk/README.md).
+# Built from the fork at the revision the SDK was installed from.
+sdk_fork=${PS5_PAYLOAD_SDK_FORK:-$vk/../PS5_PayloadSDK}
+platform="$out/ps5platform"
+rm -rf -- "$platform"
+mkdir -p "$platform"
+git -C "$sdk_fork" archive "$(<"$sdk/.ps5-sdk-revision")" Makefile.inc include platform | tar -x -C "$platform"
+for p in "$root"/patches/sdk/*.patch; do
+    patch -p1 -s -d "$platform" < "$p"
+done
+make -s -C "$platform/platform" build/ps5/libps5platform.a
+inputs=()
+for f in "${radv_link_inputs[@]}"; do
+    [ "$f" = "$sdk/target/lib/libps5platform.a" ] && f="$platform/platform/build/ps5/libps5platform.a"
+    inputs+=("$f")
+done
+radv_link_inputs=("${inputs[@]}")
 mapfile -t libs < <(find "$out/llama" -name '*.a' | sort)
 "$sdk/bin/prospero-lld" "${radv_linker_script[@]}" --eh-frame-hdr "${radv_link_flags[@]}" \
     --version-script "$vk/tooling/native/app-symbols.map" --exclude-libs=ALL \

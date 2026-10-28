@@ -1,0 +1,167 @@
+From 8b9e958ce7dee8968787251704287cc0e0c328da Mon Sep 17 00:00:00 2001
+From: Marcell Marko <marcell.marko24@gmail.com>
+Date: Tue, 27 Oct 2026 21:31:54 +0100
+Subject: [PATCH] platform: the title heap gives memory back
+
+A server that answers each request on another thread grew the heap with every
+request: a block under the 32 MiB mapping threshold stayed in the arena of the
+thread that asked, each of the eight arenas held the largest request it had
+served, and they grew 16 MiB at a time. PS5LM's llama-server, with a chat whose
+history grows to 48k tokens, filled the pool's last half GiB this way and the
+model stopped.
+
+- DEFAULT_GRANULARITY from 16 MiB to 2 MiB and the segment table from 1024 to
+  8192 entries, as 9d04878 does upstream.
+- DEFAULT_MMAP_THRESHOLD from 32 MiB to 1 MiB: a block from 1 MiB has a
+  segment of its own, returned when it is freed.
+- MAX_RELEASE_CHECK_RATE 255: frees look for wholly free segments more often.
+- ps5_heap_trim(): every arena returns its wholly free segments now.
+
+On a macOS host, with the kernel calls stubbed: a request pattern on 15 threads
+held 640 MiB at the end with the old settings, 96 MiB with these and 54 MiB with
+a trim after each request; eight threads allocating while a ninth trimmed
+171,584 times corrupted no block. Two new checks in test_platform.c, not run
+here (its --wrap link needs Linux).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ platform/include/ps5platform/heap.h |  5 +++++
+ platform/src/dlmalloc/mspace.c      | 19 ++++++++++++++----
+ platform/src/heap.c                 | 24 ++++++++++++++++++++++-
+ platform/tests/test_platform.c      | 30 +++++++++++++++++++++++++++++
+ 4 files changed, 73 insertions(+), 5 deletions(-)
+
+diff --git a/platform/include/ps5platform/heap.h b/platform/include/ps5platform/heap.h
+index ca7e417..e497b56 100644
+--- a/platform/include/ps5platform/heap.h
++++ b/platform/include/ps5platform/heap.h
+@@ -68,6 +68,11 @@ struct ps5_heap_stats {
+ 
+ void ps5_heap_stats(struct ps5_heap_stats *stats);
+ 
++/* Returns the segments no block uses any more, in every arena, to direct
++ * memory: an arena otherwise keeps what its largest moment needed until a
++ * free happens to look. The bytes returned, as far as this call saw. */
++size_t ps5_heap_trim(void);
++
+ /* The heap itself, for a title with an allocator of its own: NULL when direct
+  * memory refuses, with no fallback. realloc, free and usable_size take the
+  * heap's blocks only (ps5_heap_owns). */
+diff --git a/platform/src/dlmalloc/mspace.c b/platform/src/dlmalloc/mspace.c
+index e435b21..0fd52de 100644
+--- a/platform/src/dlmalloc/mspace.c
++++ b/platform/src/dlmalloc/mspace.c
+@@ -28,10 +28,21 @@ int ps5p_heap_unmap(void *address, size_t bytes);
+  * are 32: its compilers emit 32-byte-aligned AVX stores into plain new
+  * objects. */
+ #define MALLOC_ALIGNMENT ((size_t)32)
+-/* Each arena maps this much at a time: small enough that arenas a title
+- * barely uses hold little direct memory. */
+-#define DEFAULT_GRANULARITY ((size_t)16 << 20)
+-#define DEFAULT_MMAP_THRESHOLD ((size_t)32 << 20)
++/* Each arena maps this much at a time. Direct memory is committed whole when it
++ * is mapped, unlike libc's heap, whose pages are taken as they are touched, so
++ * 2 MiB keeps what an arena holds beyond its blocks small (9d04878 upstream);
++ * src/heap.c's segment table is sized for the larger count of segments this
++ * makes. */
++#define DEFAULT_GRANULARITY ((size_t)2 << 20)
++/* A block from 1 MiB gets a segment of its own, returned to the pool when it
++ * is freed. With 32 MiB, every block under it stayed in the arena of the
++ * thread that asked: a server that answers each request on another thread
++ * held each arena at the largest request it had served, and with eight arenas
++ * the pool filled as requests grew. Above 1 MiB the 64 KiB unit wastes at most
++ * one part in sixteen. */
++#define DEFAULT_MMAP_THRESHOLD ((size_t)1 << 20)
++/* Look for wholly free segments to return every 255 frees, not 4095. */
++#define MAX_RELEASE_CHECK_RATE 255
+ #define MALLOC_FAILURE_ACTION errno = ENOMEM
+ #define NO_MALLINFO 1
+ #define NO_MALLOC_STATS 1
+diff --git a/platform/src/heap.c b/platform/src/heap.c
+index 56a3c5e..0ad9d1f 100644
+--- a/platform/src/heap.c
++++ b/platform/src/heap.c
+@@ -41,9 +41,12 @@ void *mspace_realloc(mspace space, void *pointer, size_t bytes);
+ void *mspace_memalign(mspace space, size_t alignment, size_t bytes);
+ size_t mspace_usable_size(const void *pointer);
+ void mspace_free(mspace space, void *pointer);
++int mspace_trim(mspace space, size_t pad);
+ 
+ 
+-#define HEAP_MAX_SEGMENTS 1024
++/* Enough segments of the arenas' 2 MiB granularity (src/dlmalloc/mspace.c) to
++ * fill the whole range: 16 GiB / 2 MiB. */
++#define HEAP_MAX_SEGMENTS 8192
+ #define HEAP_UNIT PS5P_DIRECT_UNIT
+ #define HEAP_PROTECTION (PS5_KERNEL_PROT_CPU_READ | PS5_KERNEL_PROT_CPU_WRITE)
+ 
+@@ -270,6 +273,25 @@ ps5_heap_stats(struct ps5_heap_stats *stats)
+    stats->libc_fallbacks = __atomic_load_n(&libc_fallbacks, __ATOMIC_RELAXED);
+ }
+ 
++/* Every arena gives back its wholly free segments. A trim takes each arena's
++ * own lock in turn, so other threads may allocate meanwhile and the count is
++ * what the trim saw, not a promise. */
++size_t
++ps5_heap_trim(void)
++{
++   pthread_mutex_lock(&segment_lock);
++   const size_t before = mapped_bytes;
++   pthread_mutex_unlock(&segment_lock);
++   for (unsigned i = 0; i < HEAP_ARENAS; i++) {
++      if (__atomic_load_n(&arena_states[i], __ATOMIC_ACQUIRE) == 2)
++         mspace_trim(arenas[i], 0);
++   }
++   pthread_mutex_lock(&segment_lock);
++   const size_t after = mapped_bytes;
++   pthread_mutex_unlock(&segment_lock);
++   return before > after ? before - after : 0;
++}
++
+ void
+ ps5p_heap_count_fallback(void)
+ {
+diff --git a/platform/tests/test_platform.c b/platform/tests/test_platform.c
+index 0b825f5..5726c96 100644
+--- a/platform/tests/test_platform.c
++++ b/platform/tests/test_platform.c
+@@ -1107,6 +1107,36 @@ test_heap(void)
+          "heap: freeing it returns the segment's direct memory");
+    check(stats.peak_bytes >= mapped + ((size_t)100 << 20), "heap: the peak remembers it");
+ 
++   /* From 1 MiB a block has a segment of its own as well. */
++   ps5_heap_stats(&stats);
++   const unsigned mid_segments = stats.segments;
++   const size_t mid_mapped = stats.mapped_bytes;
++   void *mid = __wrap_malloc((size_t)3 << 20);
++   ps5_heap_stats(&stats);
++   check(mid && ps5_heap_owns(mid) && stats.segments == mid_segments + 1,
++         "heap: a 3 MiB block maps its own segment");
++   __wrap_free(mid);
++   ps5_heap_stats(&stats);
++   check(stats.segments == mid_segments && stats.mapped_bytes == mid_mapped,
++         "heap: freeing a 3 MiB block returns its segment");
++
++   /* Blocks under the threshold grow the arena 2 MiB at a time; once they
++    * are freed, a trim returns what they took. */
++   ps5_heap_stats(&stats);
++   const size_t arena_mapped = stats.mapped_bytes;
++   void *blocks[48];
++   for (int i = 0; i < 48; i++)
++      blocks[i] = __wrap_malloc((size_t)512 << 10);
++   ps5_heap_stats(&stats);
++   check(stats.mapped_bytes >= arena_mapped + ((size_t)20 << 20),
++         "heap: half-MiB blocks grow the arena");
++   for (int i = 0; i < 48; i++)
++      __wrap_free(blocks[i]);
++   const size_t trimmed = ps5_heap_trim();
++   ps5_heap_stats(&stats);
++   check(trimmed >= ((size_t)20 << 20) && stats.mapped_bytes <= arena_mapped + ((size_t)2 << 20),
++         "heap: a trim returns the freed blocks' segments");
++
+    /* libc's blocks stay libc's. */
+    char *foreign = strdup("libc's own");
+    check(foreign && !ps5_heap_owns(foreign), "heap: a libc block is not the heap's");
+-- 
+2.54.0 (Apple Git-157)
+

@@ -22,6 +22,27 @@ v0.1.x are the upstream payload releases by cobanov.
   request pays for it unless it asks.
 
 ### Fixed
+- A long chat no longer fills the memory and stops the model. Each request runs on another of
+  llama-server's HTTP threads, and the title heap (PS5_PayloadSDK's platform layer, eight arenas)
+  kept every arena at the largest request it had served, growing 16 MiB at a time; as a chat's
+  history grew toward 48k tokens, the last half GiB after loading filled request by request.
+  `patches/sdk` makes the heap give memory back: 2 MiB growth, a segment of its own for every
+  block from 1 MiB, and `ps5_heap_trim()`, which the app calls after each request and every idle
+  second. `scripts/build-app.sh` applies it to the platform layer and links that in place of the
+  SDK's. Each request's end now logs the pool and the heap to `app.log`
+  (`memory after request`). If the pool still falls under 0.04 GiB free while no request runs,
+  the app restarts with the same model instead of stopping during the next request. The planner
+  keeps 0.5 GiB free after loading when a cheaper cache (q4_0 for q8_0) buys it, never at the cost
+  of context; choose the cache in Settings to keep q8_0. The Home feed no longer parses a request's
+  image data. On the console (Qwen 3.5 9B with images, 64k, q8_0, one chat grown to 43k tokens)
+  the heap stayed at 2.11-2.16 GiB, while the pool still fell by about 0.37 GiB.
+- That rest was the GPU's: with a quantized cache, flash attention copies a layer's K and V to f16
+  in a Vulkan scratch sized to the context so far, replaced by a larger one as the chat grows, the
+  old one freed only later. `patches/0010` makes it once, at its largest, when the model loads
+  (`GGML_VK_PREALLOC_X`, set from the plan: 256 MiB for a 9B at 64k), for the model's context
+  only (an image encoder's context has no cache to copy), and the planner counts it. With it the
+  pool stayed within 0.02 GiB from 6k to 26k tokens. A restart keeps the last run's logs as
+  `app.prev.log` and `llama.prev.log`.
 - Models saved to an M.2 or USB drive show up in the library wherever that drive is mounted. The
   library looked only in `/mnt/ext0`, `/mnt/usb0` and `/mnt/usb1`, while downloads can go to any
   drive the exporter reports; it now also reads the download folder and every mounted drive's
