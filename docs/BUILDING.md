@@ -30,6 +30,14 @@ works too.
 For the automated, pinned-source Debian build and its validation limits, see
 [CI validation](CI.md). `scripts/test-native-build.sh` builds and statically checks
 the existing app without a console, model download, or proprietary firmware.
+`scripts/build-in-container.sh` runs it in CI's pinned Debian container on any Docker
+host, then packages again with the browser UI. On an Apple Silicon Mac, start
+[Colima](https://github.com/abiosoft/colima) with Rosetta for the amd64 image first:
+
+```sh
+colima start --vm-type vz --vz-rosetta --cpu 8 --memory 10 --disk 80
+scripts/build-in-container.sh      # build/app-ps5/title/PPSA99575
+```
 
 On Arch, the host packages (or run them in an `archlinux` container with the repository mounted):
 
@@ -59,8 +67,9 @@ scripts/release-app.sh      # build/release/ps5lm-app-vX.Y.Z.zip and its .sha256
 BlackBearReloaded's repositories, ps5-homebrew-ui and ps5-opengl, are no longer on GitHub. The
 submodule comes from a mirror at the same commit. `build-app.sh` gets the ps5-opengl SDK through
 ps5-homebrew-ui's `tools/fetch-opengl-sdk.sh`, whose download now fails: put
-`ps5-opengl-sdk-1.0.0.tar.gz` from a mirror (one is
-[here](https://github.com/MyLuxy/overdrive-deps/releases/tag/ps5-opengl-v1.0.0)) in
+`ps5-opengl-sdk-1.0.0.tar.gz` from a mirror ([JVK3R/ps5-opengl](https://github.com/JVK3R/ps5-opengl/releases/tag/v1.0.0);
+[MyLuxy/overdrive-deps](https://github.com/MyLuxy/overdrive-deps/releases/tag/ps5-opengl-v1.0.0)
+answered 404 on 2026-10-28) in
 `third_party/ps5-homebrew-ui/.deps/ps5-opengl/`, and the script checks it against its pinned
 sha256 before using it.
 
@@ -74,6 +83,7 @@ scripts/preview-app-ui.sh                          # every screen to build/app-p
 PS5_HOST=<console IP> scripts/ps5lm-app.sh cycle   # close, deploy, launch; also close|deploy|launch
 PS5_HOST=<console IP> scripts/ps5lm-app.sh load /data/PS5LM/models/<file>.gguf
 PS5_HOST=<console IP> scripts/ps5lm-app.sh screenshot out.bmp
+scripts/ps5lm-memtest.py <console IP> --ftp-port 2121 --image --target 48000 --reprocess 3   # memory over a long chat
 ```
 
 - The app closes itself on request (`/data/PS5LM/quit`), so nothing is killed while it draws.

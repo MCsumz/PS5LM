@@ -11,12 +11,16 @@ export PS5LM_NATIVE_SOURCES="${PS5LM_NATIVE_SOURCES:-$root/.deps/native-ci-src}"
 export BUILD_JOBS="${BUILD_JOBS:-2}"
 [[ $BUILD_JOBS =~ ^[1-9][0-9]*$ ]] || { echo 'BUILD_JOBS must be a positive integer' >&2; exit 2; }
 export CMAKE_BUILD_PARALLEL_LEVEL="$BUILD_JOBS"
+# Seconds for each of the two long steps (RADV, the title). An x86-64 container
+# under Rosetta builds several times slower than CI's runners.
+step_timeout="${PS5LM_STEP_TIMEOUT:-1800}"
+[[ $step_timeout =~ ^[1-9][0-9]*$ ]] || { echo 'PS5LM_STEP_TIMEOUT must be a positive integer' >&2; exit 2; }
 # SDK archive wrappers resolve this as a path, not a PATH command name.
 llvm_config=$(command -v "${LLVM_CONFIG:-llvm-config}") || {
     echo "title-check: missing LLVM_CONFIG tool: ${LLVM_CONFIG:-llvm-config}" >&2; exit 2;
 }
 export LLVM_CONFIG="$llvm_config"
-for tool in git clang clang++ make wget unzip sha256sum timeout python3 cmake ninja meson rsync glslangValidator glslc pkg-config curl ffmpeg; do
+for tool in git clang clang++ make patch wget unzip sha256sum timeout python3 cmake ninja meson rsync glslangValidator glslc pkg-config curl ffmpeg; do
     command -v "$tool" >/dev/null || { echo "title-check: missing $tool" >&2; exit 2; }
 done
 ui="$root/third_party/ps5-homebrew-ui"
@@ -91,21 +95,26 @@ ninja_real="$(command -v ninja)"
 printf '#!/bin/sh\nexec "%s" -j "%s" "$@"\n' "$ninja_real" "$BUILD_JOBS" > "$output/tools/ninja"
 chmod +x "$output/tools/ninja"
 export NINJA="$output/tools/ninja"
-timeout 1800 bash "$vk/tools/build-radv.sh" release
+timeout "$step_timeout" bash "$vk/tools/build-radv.sh" release
 
 # make libc already built this exact host tool, without the unrelated demo title.
 mkdir -p "$vk/build/host"
 cp "$vk/build/runtime-shim/ps5-native-tool" "$vk/build/host/ps5-native-tool"
-# The original OpenGL release was removed. Use the mirror documented in BUILDING.md,
-# with the original archive hash; the pinned UI fetcher also verifies every SDK file.
+# The original OpenGL release was removed. Use an archive already in the cache, or
+# the mirrors documented in BUILDING.md, with the original archive hash; the pinned
+# UI fetcher also verifies every SDK file.
 glcache="$ui/.deps/ps5-opengl"
 glarchive="$glcache/ps5-opengl-sdk-1.0.0.tar.gz"
-if [[ ! -f "$glcache/ps5-opengl-sdk-1.0.0/sdk/manifest.sha256" ]]; then
+glsha=f93643c04c843d56143b00951df1f8042ea7706ae9f19e4e9abf158e1ead77c5
+if [[ ! -f "$glcache/ps5-opengl-sdk-1.0.0/sdk/manifest.sha256" ]] &&
+    ! echo "$glsha  $glarchive" | sha256sum --check --status 2>/dev/null; then
     mkdir -p "$glcache"
-    curl -fL --retry 2 --max-time 300 \
-        https://github.com/MyLuxy/overdrive-deps/releases/download/ps5-opengl-v1.0.0/ps5-opengl-sdk-1.0.0.tar.gz \
-        -o "$glarchive.part"
-    echo "f93643c04c843d56143b00951df1f8042ea7706ae9f19e4e9abf158e1ead77c5  $glarchive.part" | sha256sum --check --status
+    for mirror in https://github.com/MyLuxy/overdrive-deps/releases/download/ps5-opengl-v1.0.0 \
+            https://github.com/JVK3R/ps5-opengl/releases/download/v1.0.0; do
+        curl -fL --retry 2 --max-time 300 "$mirror/ps5-opengl-sdk-1.0.0.tar.gz" -o "$glarchive.part" &&
+            echo "$glsha  $glarchive.part" | sha256sum --check --status && break
+        rm -f "$glarchive.part"
+    done
     mv "$glarchive.part" "$glarchive"
 fi
 glsdk=$(bash "$ui/tools/fetch-opengl-sdk.sh")
@@ -117,7 +126,7 @@ export PS5_OPENGL_SDK="$glsdk"
 }
 rm -rf -- "$root/build/app-ps5/llama/tools/ui/dist"
 export PS5LM_PREBUILT_UI=OFF
-timeout 1800 bash scripts/build-app.sh
+timeout "$step_timeout" bash scripts/build-app.sh
 bash "$vk/tools/inspect.sh" "$root/build/app-ps5/eboot.elf"
 title_id=$(python3 -c 'import json; print(json.load(open("ps5/app/sce_sys/param.json"))["titleId"])')
 app="$root/build/app-ps5/title/$title_id"
