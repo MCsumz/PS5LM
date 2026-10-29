@@ -7,26 +7,39 @@ v0.1.x are the upstream payload releases by cobanov. The `0.9.1-memfixN` release
 (PS5LM-memfix): 0.9.1 and upstream's later main with memory and connection fixes, tagged
 `v0.9.1-memfixN` and shipped as `ps5lm-app-v0.9.1-memfixN.zip`. The app still calls itself 0.9.1.
 
-## [Unreleased]
+## [0.9.1-memfix8] - 2026-10-29
+
+memfix5 plus two llama-server fixes for agent chats in Open WebUI; memory handling is unchanged.
+memfix6 and memfix7 were test builds of the first fix.
 
 ### Fixed
-- A new message after an agent turn no longer processes the whole turn again. Qwen3.5's chat
-  template renders an assistant message's thinking only after the last user message, so the next
-  user message rendered the turn before it differently and the cache no longer matched: on the
-  console, a 37k-token chat took 190 s before its answer started. llama.cpp keeps the thinking of
-  earlier turns by default (`--reasoning-preserve`) for templates that support it; Qwen3.5's
-  template ignored it, and now honours it (`patches/0012`, in the same place llama.cpp already
-  fixes up other templates): a message has its thinking block wherever it is in the history, and
-  only when it has thinking. A client that sends the thinking back keeps it in the context; Open
-  WebUI without a provider set sends none, and its turns render as Qwen3.5 sees past turns, with no
-  block. `--no-reasoning-preserve` (or `LLAMA_ARG_REASONING_PRESERVE=false` in `env.txt`) restores
-  the template's own behaviour. Measured on the console with the template as shipped, a 4.7k-token
-  agent turn followed by a new message processed all 4,684 tokens again in 10.5 s; with the
-  thinking kept, 52 tokens in 0.2 s; in an Open WebUI chat, a follow-up after an 8.4k-token agent
-  turn processed 37 tokens in 0.2 s. memfix6 kept an empty block on every earlier turn instead,
-  and with Open WebUI the model then left its visible reply empty in 4 of 6 follow-ups (0 of 6
-  with the template as shipped); memfix7 renders none. `tests/test-chat.cpp` checks that a new
-  message only appends and that no empty block is rendered.
+- **Prompt cache survives a new user message (Qwen3.5).** The template rendered an assistant
+  message's thinking only after the last user message, so each new message re-rendered the turn
+  before it and the cache no longer matched: a 37k-token agent chat reprocessed for 190 s.
+  `patches/0012` makes the template honour llama.cpp's `preserve_thinking` (`--reasoning-preserve`,
+  on by default): a message gets a `<think>` block wherever it is, and only if it has reasoning.
+  Empty blocks are left out because Open WebUI sends no reasoning back, and a history of empty
+  blocks made Qwen3.5 answer inside its thinking (memfix6: 4 of 6 replies empty). Off with
+  `--no-reasoning-preserve` or `LLAMA_ARG_REASONING_PRESERVE=false` in `env.txt`. Checked by
+  `tests/test-chat.cpp`.
+- **Media marker in request text.** `/props` publishes the random marker that stands for an image
+  in the prompt. Text containing it (a tool that read `/props`) made mtmd expect one image more
+  than the request had, and every later request of that chat failed with "Failed to tokenize
+  prompt". `patches/0013` writes it as `[media marker]` in all message text and tool definitions
+  before the images get theirs (OpenAI, Anthropic and Responses endpoints).
+
+### Tested on a PS5 Fat
+Qwen3.5-9B Q4_K_M with `Qwen3.5-9B.mmproj-Q8_0.gguf`, 64k context, q8_0 cache.
+- Next message after an agent turn: 52 tokens in 0.2 s instead of 4,684 in 10.5 s (4.6k-token
+  turn); 419 tokens in 1.2 s instead of 12,406 in 49.6 s (12k-token turn with tool calls).
+- Empty visible replies after an agent turn: 0 of 6 (memfix6: 4 of 6).
+- Open WebUI agent chat (Mac and LAN checks, `/props`, web search), then follow-ups in the same
+  chat: every answer visible, 118-376 tokens in 0.5-1.0 s each.
+- `/props` in a message, `/props` as a tool result, an image, and an image with the marker in its
+  text: all answered (before: HTTP 400).
+- Keep-alive: 8 of 8 streamed requests on one reused connection, gaps of 0-5 s.
+- 48k memory test, an image every turn: 42 turns to 48,504 tokens, then 6 full reprocesses; every
+  request answered, lowest 0.15 GiB free and level through all reprocesses, CPU heap 2.15-2.19 GiB.
 
 ## [0.9.1-memfix5] - 2026-10-29
 
