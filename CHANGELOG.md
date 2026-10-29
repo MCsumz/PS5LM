@@ -3,23 +3,13 @@
 Versions follow [semver](https://semver.org). The app's version is set in
 `ps5/app/version.hpp` and shown on the dashboard; each release is tagged
 `v<version>` and ships `ps5lm-app-v<version>.zip` (see `scripts/release-app.sh`).
-v0.1.x are the upstream payload releases by cobanov.
+v0.1.x are the upstream payload releases by cobanov. The `0.9.1-memfixN` releases are this fork's
+(PS5LM-memfix): 0.9.1 and upstream's later main with memory and connection fixes, tagged
+`v0.9.1-memfixN` and shipped as `ps5lm-app-v0.9.1-memfixN.zip`. The app still calls itself 0.9.1.
 
-## [Unreleased]
+## [0.9.1-memfix5] - 2026-10-29
 
-### Added
-- **An opt-in endpoint for the model's own numbers**: `POST /v1/introspect` answers with the whole
-  logit row at the positions you name, the top candidates with their probabilities, the entropy, and
-  one row of a named graph tensor (`l_out`, `ffn_swiglu`, `ffn_out`, `attn_out`, `attn_norm`, `ffn_norm`,
-  `result_norm`, `result_output`) for a named layer. A request can also change one channel in place,
-  with zero, scale or add, at one position or at all of them. `messages` applies the chat template
-  first. It is off by default: Settings > Developer > "Logits and activations API" (a change
-  restarts the app with the loaded model), or `LLAMA_INTROSPECT=1`. `docs/INTROSPECTION.md` is the
-  reference, `scripts/ps5lm-introspect.py` is a client, and `examples/interpret/neuron_ablation.py`
-  zeroes the FFN neurons (`ffn_swiglu`) of one layer one at a time.
-- The patch reads the logits from the context's own output buffer and copies the tensors out of the
-  compute graph with the eval callback that llama.cpp already has, so no work is repeated and no
-  request pays for it unless it asks.
+memfix4 and one connection fix; nothing in memory changed.
 
 ### Fixed
 - A streamed reply no longer closes its connection. llama-server ends each stream by returning
@@ -31,6 +21,24 @@ v0.1.x are the upstream payload releases by cobanov.
   failed write still closes the connection. The patch is in cpp-httplib rather than llama-server's
   provider because 0007 keeps that provider's last line as its context. `tests/test_stream_keepalive.py`
   sends a second request after a stream, on cpp-httplib as shipped and as patched.
+
+### Tested on a PS5 Fat
+- Connection probes against the console, memfix4 then memfix5: a request on the connection right
+  after a streamed reply (closed 6 of 6, then ok 6 of 6), back-to-back requests (2 of 6 failed, then
+  8 of 8 ok), replies of 2.7-8 s each followed at once by another (7 of 16 failed, then 16 of 16 ok),
+  a cancelled stream and then a new request (4 of 6 failed, then 6 of 6 ok), a long request and a
+  follow-up 0.2 s later (7 of 8 failed, then 2 of 2 ok).
+- An agent chat in Open WebUI with Qwen 3.5 9B, 64k context: one turn ran 45+ tool calls in a sandbox
+  with no disconnect, where memfix4 stopped after the first, and Open WebUI's compaction fired in the
+  middle of it at about 47.8k tokens, after which the model carried on. Memory went from 0.66 GiB
+  free at load to 0.35 GiB at its lowest, the CPU heap stayed at about 2.1 GiB, and no out-of-memory
+  error was logged.
+
+## [0.9.1-memfix4] - 2026-10-29
+
+The fourth iteration of the memory fix, the first one released.
+
+### Fixed
 - A long chat no longer fills the memory and stops the model. Each request runs on another of
   llama-server's HTTP threads, and the title heap (PS5_PayloadSDK's platform layer, eight arenas)
   kept every arena at the largest request it had served, growing 16 MiB at a time; as a chat's
@@ -52,6 +60,36 @@ v0.1.x are the upstream payload releases by cobanov.
   only (an image encoder's context has no cache to copy), and the planner counts it. With it the
   pool stayed within 0.02 GiB from 6k to 26k tokens. A restart keeps the last run's logs as
   `app.prev.log` and `llama.prev.log`.
+
+### Added
+- `scripts/build-in-container.sh` builds the title in CI's pinned Debian container on any Docker
+  host (Colima with Rosetta on an Apple Silicon Mac), and `scripts/ps5lm-memtest.py` measures
+  memory over a long chat against a console.
+
+### Tested on a PS5 Fat
+- Qwen 3.5 9B Q4_K_M with its vision projector, 64k context, q8_0 cache: one chat grown to 48k
+  tokens over 42 turns with an image sent every turn, then six full reprocesses of the whole 48k
+  history. Every request was answered, the CPU heap stayed at 2.12-2.18 GiB and the pool at
+  0.19 GiB free. The original 0.9.1 stopped before 48k in the same use.
+
+### From upstream after 0.9.1
+cobanov/PS5LM's main after 0.9.1, not yet released there, is in every memfix build.
+
+#### Added
+- **An opt-in endpoint for the model's own numbers**: `POST /v1/introspect` answers with the whole
+  logit row at the positions you name, the top candidates with their probabilities, the entropy, and
+  one row of a named graph tensor (`l_out`, `ffn_swiglu`, `ffn_out`, `attn_out`, `attn_norm`, `ffn_norm`,
+  `result_norm`, `result_output`) for a named layer. A request can also change one channel in place,
+  with zero, scale or add, at one position or at all of them. `messages` applies the chat template
+  first. It is off by default: Settings > Developer > "Logits and activations API" (a change
+  restarts the app with the loaded model), or `LLAMA_INTROSPECT=1`. `docs/INTROSPECTION.md` is the
+  reference, `scripts/ps5lm-introspect.py` is a client, and `examples/interpret/neuron_ablation.py`
+  zeroes the FFN neurons (`ffn_swiglu`) of one layer one at a time.
+- The patch reads the logits from the context's own output buffer and copies the tensors out of the
+  compute graph with the eval callback that llama.cpp already has, so no work is repeated and no
+  request pays for it unless it asks.
+
+#### Fixed
 - Models saved to an M.2 or USB drive show up in the library wherever that drive is mounted. The
   library looked only in `/mnt/ext0`, `/mnt/usb0` and `/mnt/usb1`, while downloads can go to any
   drive the exporter reports; it now also reads the download folder and every mounted drive's

@@ -18,11 +18,14 @@
 
 > [!IMPORTANT]
 > **This is a modified build of [cobanov/PS5LM](https://github.com/cobanov/PS5LM) with a memory
-> fix (memfix4, the fourth iteration).** On the original, a long chat filled the PS5's memory
+> fix and a connection fix (memfix5).** On the original, a long chat filled the PS5's memory
 > about 0.1 GB at a time until the model stopped, well before OpenWebUI's 48k compaction.
-> memfix4 was tested directly on a PS5 Fat over a couple of hours of trial and error: Qwen 3.5 9B
-> with images at 64k context, a chat grown to 48k tokens over 42 turns, then six full 48k
-> reprocesses. Every request was answered, with memory steady at 0.19 GiB free.
+> The memory fix took four iterations, tested directly on a PS5 Fat over a couple of hours of
+> trial and error; memfix4 held Qwen 3.5 9B with images at 64k context through a chat grown to
+> 48k tokens over 42 turns, then six full 48k reprocesses, every request answered, with memory
+> steady at 0.19 GiB free. memfix5 keeps that and fixes agent chats: a streamed reply closed its
+> connection, so OpenWebUI's next tool call failed with "Server Connection Error". On memfix5 one
+> agent turn ran 45+ tool calls past the 48k compaction.
 >
 > **Why it matters, with the setup it was made for.** The model is `Qwen3.5-9B-Q4_K_M.gguf` with its
 > vision module `Qwen3.5-9B.mmproj-Q8_0.gguf`, at 64k context with a q8_0 cache, used from OpenWebUI
@@ -37,12 +40,12 @@
 >
 > With only about half a GiB of room, memory that grows with every request runs the pool out long
 > before 48k. A smaller model or no vision module leaves more room and hides the problem longer,
-> but the growth was there regardless.
+> but the growth was there regardless. memfix5 changes nothing in memory.
 >
 > What changed: the CPU heap gives memory back (`patches/sdk`), flash attention's GPU scratch is
 > made once at load instead of growing with the chat (`patches/0010`), the planner counts it, each
-> request logs its memory to `app.log`, and an idle server reloads its model only when nearly no
-> memory is left. Details in the [CHANGELOG](CHANGELOG.md) and
+> request logs its memory to `app.log`, an idle server reloads its model only when nearly no
+> memory is left, and a finished stream keeps its keep-alive connection (`patches/0011`). Details in the [CHANGELOG](CHANGELOG.md) and
 > [pull request #1](https://github.com/MCsumz/PS5LM-memfix/pull/1). Everything else is the original
 > PS5LM, and the rest of this README is the original's: report issues with the memory fix here,
 > anything else [upstream](https://github.com/cobanov/PS5LM/issues).
@@ -130,7 +133,7 @@ You need a PS5 on firmware 7.00 to 13.60, jailbroken, with these payloads loaded
 | [elfldr](https://github.com/ps5-payload-dev/elfldr) (port 9021) | temperature, power and real free space, through ps5-exporter | recommended |
 | [ftpsrv](https://github.com/ps5-payload-dev/ftpsrv) (port 2121) | installing the app, copying models from a PC | recommended |
 
-1. Download `ps5lm-app-v0.9.1-memfix4.zip` from this fork's [latest release](https://github.com/MCsumz/PS5LM-memfix/releases/latest)
+1. Download `ps5lm-app-v0.9.1-memfix5.zip` from this fork's [latest release](https://github.com/MCsumz/PS5LM-memfix/releases/latest)
    (or the original's `ps5lm-app-vX.Y.Z.zip` from [cobanov/PS5LM](https://github.com/cobanov/PS5LM/releases/latest)) and unzip it.
 2. Copy the `PPSA99575` folder to `/data/homebrew` over FTP. ShadowMountPlus adds **PS5LM** to the
    home screen.
