@@ -24,6 +24,21 @@
 > with images at 64k context, a chat grown to 48k tokens over 42 turns, then six full 48k
 > reprocesses. Every request was answered, with memory steady at 0.19 GiB free.
 >
+> **Why it matters, with the setup it was made for.** The model is `Qwen3.5-9B-Q4_K_M.gguf` with its
+> vision module `Qwen3.5-9B.mmproj-Q8_0.gguf`, at 64k context with a q8_0 cache, used from OpenWebUI
+> with images and compaction at 48k tokens. The PS5 gives a title 11.4 GiB for the model, its cache,
+> the image encoder and the server, and this setup fills almost all of it:
+>
+> | | Original 0.9.1 | memfix4 |
+> |---|---|---|
+> | In use after loading | 10.9 GB | 10.7 GB (attention scratch already included) |
+> | During a long chat | grew about 0.1 GB at a time | one-time steps, then flat |
+> | At 48k tokens | 11.4 GB: full, the model stopped | about 11.25 GB, 0.19 GiB free, stable |
+>
+> With only about half a GiB of room, memory that grows with every request runs the pool out long
+> before 48k. A smaller model or no vision module leaves more room and hides the problem longer,
+> but the growth was there regardless.
+>
 > What changed: the CPU heap gives memory back (`patches/sdk`), flash attention's GPU scratch is
 > made once at load instead of growing with the chat (`patches/0010`), the planner counts it, each
 > request logs its memory to `app.log`, and an idle server reloads its model only when nearly no
