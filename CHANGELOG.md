@@ -16,12 +16,17 @@ v0.1.x are the upstream payload releases by cobanov. The `0.9.1-memfixN` release
   console, a 37k-token chat took 190 s before its answer started. llama.cpp keeps the thinking of
   earlier turns by default (`--reasoning-preserve`) for templates that support it; Qwen3.5's
   template ignored it, and now honours it (`patches/0012`, in the same place llama.cpp already
-  fixes up other templates). A client that sends the thinking back keeps it in the context; Open
-  WebUI without a provider set sends none, and its earlier turns keep the empty thinking block they
-  had. `--no-reasoning-preserve` (or `LLAMA_ARG_REASONING_PRESERVE=false` in `env.txt`) restores
+  fixes up other templates): a message has its thinking block wherever it is in the history, and
+  only when it has thinking. A client that sends the thinking back keeps it in the context; Open
+  WebUI without a provider set sends none, and its turns render as Qwen3.5 sees past turns, with no
+  block. `--no-reasoning-preserve` (or `LLAMA_ARG_REASONING_PRESERVE=false` in `env.txt`) restores
   the template's own behaviour. Measured on the console with the template as shipped, a 4.7k-token
   agent turn followed by a new message processed all 4,684 tokens again in 10.5 s; with the
-  thinking kept, 52 tokens in 0.2 s. `tests/test-chat.cpp` checks that a new message only appends.
+  thinking kept, 52 tokens in 0.2 s; in an Open WebUI chat, a follow-up after an 8.4k-token agent
+  turn processed 37 tokens in 0.2 s. memfix6 kept an empty block on every earlier turn instead,
+  and with Open WebUI the model then left its visible reply empty in 4 of 6 follow-ups (0 of 6
+  with the template as shipped); memfix7 renders none. `tests/test-chat.cpp` checks that a new
+  message only appends and that no empty block is rendered.
 
 ## [0.9.1-memfix5] - 2026-10-29
 
