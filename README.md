@@ -2,7 +2,7 @@
   <img src="ps5/app/sce_sys/icon0.png" width="128" alt="PS5LM">
 </p>
 
-<h1 align="center">PS5LM</h1>
+<h1 align="center">PS5LM-memfix</h1>
 
 <p align="center">
   <b>Your PS5 runs the language model. Every device on your network uses it.</b><br>
@@ -10,11 +10,27 @@
 </p>
 
 <p align="center">
-  <b><a href="https://github.com/cobanov/PS5LM/releases/latest">Get the app</a></b> ·
+  <b><a href="https://github.com/MCsumz/PS5LM-memfix/releases/latest">Get the memfix build</a></b> ·
+  <a href="https://github.com/cobanov/PS5LM">Original PS5LM</a> ·
   <a href="https://ps5lm.cobanov.dev">Website</a> ·
-  <a href="#try-it">Get started</a> ·
-  <a href="https://github.com/cobanov/PS5LM/issues">Issues</a>
+  <a href="#try-it">Get started</a>
 </p>
+
+> [!IMPORTANT]
+> **This is a modified build of [cobanov/PS5LM](https://github.com/cobanov/PS5LM) with a memory
+> fix (memfix4, the fourth iteration).** On the original, a long chat filled the PS5's memory
+> about 0.1 GB at a time until the model stopped, well before OpenWebUI's 48k compaction.
+> memfix4 was tested directly on a PS5 Fat over a couple of hours of trial and error: Qwen 3.5 9B
+> with images at 64k context, a chat grown to 48k tokens over 42 turns, then six full 48k
+> reprocesses. Every request was answered, with memory steady at 0.19 GiB free.
+>
+> What changed: the CPU heap gives memory back (`patches/sdk`), flash attention's GPU scratch is
+> made once at load instead of growing with the chat (`patches/0010`), the planner counts it, each
+> request logs its memory to `app.log`, and an idle server reloads its model only when nearly no
+> memory is left. Details in the [CHANGELOG](CHANGELOG.md) and
+> [pull request #1](https://github.com/MCsumz/PS5LM-memfix/pull/1). Everything else is the original
+> PS5LM, and the rest of this README is the original's: report issues with the memory fix here,
+> anything else [upstream](https://github.com/cobanov/PS5LM/issues).
 
 > **New: decision models, powered by [Ollaya](https://ollaya.dev).** PS5LM now runs Jev-like
 > decision models (d1, Clef, OpenJev and more) on the GPU and answers the same `/v1/systemone`
@@ -99,7 +115,8 @@ You need a PS5 on firmware 7.00 to 13.60, jailbroken, with these payloads loaded
 | [elfldr](https://github.com/ps5-payload-dev/elfldr) (port 9021) | temperature, power and real free space, through ps5-exporter | recommended |
 | [ftpsrv](https://github.com/ps5-payload-dev/ftpsrv) (port 2121) | installing the app, copying models from a PC | recommended |
 
-1. Download `ps5lm-app-vX.Y.Z.zip` from the [latest release](https://github.com/cobanov/PS5LM/releases/latest) and unzip it.
+1. Download `ps5lm-app-v0.9.1-memfix4.zip` from this fork's [latest release](https://github.com/MCsumz/PS5LM-memfix/releases/latest)
+   (or the original's `ps5lm-app-vX.Y.Z.zip` from [cobanov/PS5LM](https://github.com/cobanov/PS5LM/releases/latest)) and unzip it.
 2. Copy the `PPSA99575` folder to `/data/homebrew` over FTP. ShadowMountPlus adds **PS5LM** to the
    home screen.
 3. Open PS5LM, go to **Models > Suggested** and get a model. Or copy a `.gguf` to
