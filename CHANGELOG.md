@@ -22,6 +22,15 @@ v0.1.x are the upstream payload releases by cobanov.
   request pays for it unless it asks.
 
 ### Fixed
+- A streamed reply no longer closes its connection. llama-server ends each stream by returning
+  false after `sink.done()`, and cpp-httplib took that as a cancelled response: it closed the
+  connection right after sending `Keep-Alive: timeout=5`. A client that reuses the connection at once
+  lost its next request. Open WebUI sends each tool-call continuation within a fraction of a second,
+  so agent chats stopped after their first tool call with "Server Connection Error". cpp-httplib now
+  ends a stream normally once its provider has called `done()` (`patches/0011`); a cancel or a
+  failed write still closes the connection. The patch is in cpp-httplib rather than llama-server's
+  provider because 0007 keeps that provider's last line as its context. `tests/test_stream_keepalive.py`
+  sends a second request after a stream, on cpp-httplib as shipped and as patched.
 - A long chat no longer fills the memory and stops the model. Each request runs on another of
   llama-server's HTTP threads, and the title heap (PS5_PayloadSDK's platform layer, eight arenas)
   kept every arena at the largest request it had served, growing 16 MiB at a time; as a chat's

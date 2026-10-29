@@ -1,0 +1,16 @@
+diff --git a/vendor/cpp-httplib/httplib.cpp b/vendor/cpp-httplib/httplib.cpp
+--- a/vendor/cpp-httplib/httplib.cpp
++++ b/vendor/cpp-httplib/httplib.cpp
+@@ -4237,6 +4237,12 @@
+       error = Error::Write;
+       return false;
+     } else if (!content_provider(offset, 0, data_sink)) {
++      // PS5LM: llama-server's provider calls done() and then returns false
++      // on its last pass. The body is complete by then; counting it as
++      // cancelled closed the connection right after "Keep-Alive", and a
++      // client that reused it at once (Open WebUI's tool-call continuation)
++      // got a disconnect. A failed write still leaves ok false.
++      if (!data_available && ok) { break; }
+       error = Error::Canceled;
+       return false;
+     } else if (!ok) {
