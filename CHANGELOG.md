@@ -7,6 +7,22 @@ v0.1.x are the upstream payload releases by cobanov. The `0.9.1-memfixN` release
 (PS5LM-memfix): 0.9.1 and upstream's later main with memory and connection fixes, tagged
 `v0.9.1-memfixN` and shipped as `ps5lm-app-v0.9.1-memfixN.zip`. The app still calls itself 0.9.1.
 
+## [Unreleased]
+
+### Fixed
+- A new message after an agent turn no longer processes the whole turn again. Qwen3.5's chat
+  template renders an assistant message's thinking only after the last user message, so the next
+  user message rendered the turn before it differently and the cache no longer matched: on the
+  console, a 37k-token chat took 190 s before its answer started. llama.cpp keeps the thinking of
+  earlier turns by default (`--reasoning-preserve`) for templates that support it; Qwen3.5's
+  template ignored it, and now honours it (`patches/0012`, in the same place llama.cpp already
+  fixes up other templates). A client that sends the thinking back keeps it in the context; Open
+  WebUI without a provider set sends none, and its earlier turns keep the empty thinking block they
+  had. `--no-reasoning-preserve` (or `LLAMA_ARG_REASONING_PRESERVE=false` in `env.txt`) restores
+  the template's own behaviour. Measured on the console with the template as shipped, a 4.7k-token
+  agent turn followed by a new message processed all 4,684 tokens again in 10.5 s; with the
+  thinking kept, 52 tokens in 0.2 s. `tests/test-chat.cpp` checks that a new message only appends.
+
 ## [0.9.1-memfix5] - 2026-10-29
 
 memfix4 and one connection fix; nothing in memory changed.
