@@ -20,7 +20,7 @@
 > **This is a modified build of [cobanov/PS5LM](https://github.com/cobanov/PS5LM) 0.9.1 (memfix8)
 > for long chats and agent use from OpenWebUI**, tested on a PS5 Fat:
 > - **Memory:** a long chat no longer fills the pool about 0.1 GB at a time until the model stops
->   (`patches/sdk`, `patches/0010`). 48k tokens with images: every request answered, 0.19 GiB free.
+>   (`patches/sdk`, `patches/0010`). 48k tokens with images: every request answered, 0.15-0.19 GiB free.
 > - **Connections:** a streamed reply keeps its keep-alive connection, so OpenWebUI's tool-call
 >   continuations no longer fail with "Server Connection Error" (`patches/0011`).
 > - **Prompt cache:** a new message after an agent turn no longer reprocesses the whole turn
