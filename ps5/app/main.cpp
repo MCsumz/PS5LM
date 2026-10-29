@@ -114,6 +114,16 @@ constexpr const char * kLlamaLog    = "/data/PS5LM/llama.log";
 constexpr const char * kModels      = "/data/PS5LM/models";
 constexpr const char * kAssets      = "/app0/assets";
 constexpr int          kPort        = 8081;
+// Free memory under which an idle server is restarted with the same model,
+// before a request finds none and the model stops; only once the pool has
+// lost kLowMemoryDropGib since the model became ready, so a model that loads
+// tight is not restarted over and over. With the attention scratch made at
+// load (patches/0010) a request takes a few tens of MiB that it gives back,
+// and the pool's free part drifts down by about 0.01 GiB per 1k tokens while
+// there is room and stops when there is none: a chat ran at 0.06 GiB free for
+// 15k tokens (Qwen 3.5 9B, 2026-10-28). So only nearly nothing left counts.
+constexpr double       kLowMemoryGib     = 0.04;
+constexpr double       kLowMemoryDropGib = 0.2;
 const std::vector<std::string> kModelDirs = { kModels, "/mnt/ext0/PS5LM/models", "/mnt/usb0/PS5LM/models",
                                               "/mnt/usb1/PS5LM/models", "/mnt/usb0", "/mnt/usb1" };
 
@@ -423,6 +433,7 @@ void * run_server(void *) {
 
 struct Models {
     double                 budget_gib = 0;   // GPU memory free before any model
+    uint64_t               prealloc_x = 0;   // the last plan's flash-attention scratch (GGML_VK_PREALLOC_X)
     std::vector<ModelRow>  rows;
     std::string            running;          // path of the model llama-server has
     pthread_t              server{};
@@ -542,6 +553,7 @@ struct Models {
         model_part.ctx         = p.ctx;
         model_part.kv_type     = p.kv_type;
         model_part.kv_gib      = p.kv_gib;
+        prealloc_x             = p.fits ? p.scratch_bytes : 0;
         return p.fits ? p.args : std::vector<std::string>{};
     }
 
@@ -630,6 +642,10 @@ bool load_font(hui::gfx::Renderer & renderer, const char * name, hui::gfx::Font 
 int main(int, char **) {
     // /data first: the log, the settings and the models live there.
     const std::string data = open_data();
+    // The last run's logs stay beside the new ones: a restart (a model switch,
+    // or the low-memory reload) would otherwise wipe what led up to it.
+    std::rename(kLog, "/data/PS5LM/app.prev.log");
+    std::rename(kLlamaLog, "/data/PS5LM/llama.prev.log");
     // stdout and stderr to a file the PC can fetch over FTP.
     if (std::freopen(kLog, "w", stdout) != nullptr) {
         setvbuf(stdout, nullptr, _IOLBF, 0);
@@ -797,6 +813,13 @@ int main(int, char **) {
             // server reads LLAMA_INTROSPECT when its thread starts, below. The
             // setting wins over env.txt, so the row always says what the server does.
             setenv("LLAMA_INTROSPECT", models.settings.introspect ? "1" : "0", 1);
+            // Flash attention's f16 copy of a quantized cache at the planned
+            // context, made whole at load instead of growing during a chat
+            // (patches/0010). env.txt, read earlier, keeps its own value.
+            if (models.prealloc_x != 0) {
+                setenv("GGML_VK_PREALLOC_X", std::to_string(models.prealloc_x).c_str(), 0);
+                std::printf("ps5lm-app: attention scratch %s bytes at load\n", getenv("GGML_VK_PREALLOC_X"));
+            }
             models.start(path, args, stats, model_part);
         } else {
             stats.set_state(ServerState::no_model);
@@ -861,6 +884,7 @@ int main(int, char **) {
     hui::PadSample samples[64];
     int64_t last = hui::sys::monotonic_us();
     bool was_serving = false;
+    double ready_free = 0;  // the pool's free GiB when the model became ready
     bool rescanning = false;
     uint64_t restart_at = 0;  // the frame to stop the model and restart on, or 0
     for (uint64_t n = 0;; ++n) {
@@ -888,8 +912,22 @@ int main(int, char **) {
         const bool serving = live.state == ServerState::ready || live.state == ServerState::generating;
         if (serving && !was_serving) {
             notify(live.decision.empty() ? "PS5LM: ready, chat in a browser on this network" : "PS5LM: ready for decisions at /v1/systemone");
+            ready_free = live.free_gib;
         }
         was_serving = serving;
+        // The pool nearly full while no request runs: restart with the same
+        // model now rather than stop in the middle of the next request. The
+        // slot's cache goes with it, so the next request reads its prompt again.
+        if (n % 60 == 15 && restart_at == 0 && live.state == ServerState::ready && !models.running.empty() &&
+            live.free_gib > 0 && live.free_gib < kLowMemoryGib && ready_free - live.free_gib > kLowMemoryDropGib) {
+            std::printf("ps5lm-app: %.2f GiB free (%.2f when ready); restarting %s before a request runs out\n",
+                        live.free_gib, ready_free, models.running.c_str());
+            log_memory("before the low-memory restart");
+            std::ofstream(kChoice) << models.running << "\n";
+            notify("PS5LM: memory ran low; reloading the model");
+            dash.set_busy("Reloading " + base_name(models.running), "Memory ran low; the app restarts with the same model");
+            restart_at = n + 3;
+        }
         if (n % 30 == 0) {
             models.publish(stats);
         }

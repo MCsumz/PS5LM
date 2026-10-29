@@ -62,6 +62,27 @@ int main(int argc, char ** argv) {
     const ps5lm::Plan cp = ps5lm::plan_model(c, budget);
     assert(cp.fits && cp.ctx > 4096 && has_args(cp, "-ub", "64"));
 
+    // Headroom: half a GiB left after loading when a cheaper cache buys it,
+    // never at the cost of context.
+    // A quantized cache also takes flash attention's f16 copy of one layer,
+    // 4 heads x (256 + 256) x 64k x 2 bytes, sized at load (patches/0010).
+    const uint64_t scratch = ps5lm::fa_scratch_bytes(c, "q8_0", 65536);
+    assert(scratch == 256ull << 20 && ps5lm::fa_scratch_bytes(c, "q4_0", 65536) == scratch);
+    assert(ps5lm::fa_scratch_bytes(c, "f16", 65536) == 0);
+    assert(cp.kv_type == "f16" || cp.scratch_bytes == ps5lm::fa_scratch_bytes(c, cp.kv_type, cp.ctx));
+    const double base = cp.weights_gib + cp.state_gib + cp.reserve_gib + scratch / 1073741824.0;
+    const double q8 = base + ps5lm::kv_bytes_per_token(c, "q8_0") * 65536 / 1073741824.0;
+    const double q4 = base + ps5lm::kv_bytes_per_token(c, "q4_0") * 65536 / 1073741824.0;
+    assert(q8 - q4 > 0.1);
+    const ps5lm::Plan roomy = ps5lm::plan_model(c, q8 + 0.6);
+    assert(roomy.ctx == 65536 && roomy.kv_type == "q8_0");
+    const ps5lm::Plan tight = ps5lm::plan_model(c, q8 + 0.1);
+    assert(tight.ctx == 65536 && tight.kv_type == "q4_0");
+    const ps5lm::Plan tightest = ps5lm::plan_model(c, q4 + 0.05);
+    assert(tightest.ctx == 65536 && tightest.kv_type == "q4_0");
+    const ps5lm::Plan forced = ps5lm::plan_model(c, q8 + 0.1, 65536, "q8_0");
+    assert(forced.ctx == 65536 && forced.kv_type == "q8_0");
+
     if (argc < 2) {
         std::puts("model_plan_test: ok (synthetic only)");
         return 0;

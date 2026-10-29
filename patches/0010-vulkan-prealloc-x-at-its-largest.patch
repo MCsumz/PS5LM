@@ -1,0 +1,25 @@
+diff --git a/ggml/src/ggml-vulkan/ggml-vulkan.cpp b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+index 1880098..96aac90 100644
+--- a/ggml/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+@@ -5464,6 +5464,20 @@ void ggml_vk_init(ggml_backend_vk_context * ctx, size_t idx) {
+     ctx->prealloc_size_split_k = 0;
+     // Fixed size of 1KB, for deterministic behavior
+     ctx->prealloc_size_add_rms_partials = 1024;
++    // PS5LM: with a quantized KV cache, flash attention copies K and V to f16
++    // in prealloc_x, sized to the context so far, so the buffer is replaced by
++    // a larger one as a chat grows and the old one is freed only later. On a
++    // console with a fixed pool that ran it out mid-chat. GGML_VK_PREALLOC_X
++    // (bytes) makes it here, at its largest, so the model's memory at load is
++    // what it keeps. Only the first context takes it, the model's: an image
++    // encoder (mtmd) makes a second one later and has no cache to copy.
++    static std::atomic<bool> prealloc_x_taken{ false };
++    if (const char * prealloc_x = getenv("GGML_VK_PREALLOC_X"); prealloc_x && !prealloc_x_taken.exchange(true)) {
++        ctx->prealloc_size_x = std::strtoull(prealloc_x, nullptr, 10);
++        if (ctx->prealloc_size_x > 0) {
++            ctx->prealloc_x = ggml_vk_create_buffer_device(ctx->device, ctx->prealloc_size_x);
++        }
++    }
+ 
+     ctx->fence = ctx->device->device.createFence({});
+     ctx->almost_ready_fence = ctx->device->device.createFence({});

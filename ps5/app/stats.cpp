@@ -26,6 +26,8 @@ extern "C" int  sceKernelGetCpuTemperature(int * celsius);
 extern "C" int  sceKernelGetSocSensorTemperature(int sensor, int * celsius);
 extern "C" int  sceKernelGetSocPowerConsumption(uint64_t * out, double reserved);
 extern "C" long sceKernelGetCpuFrequency(void);
+// The title heap's free segments back to direct memory (patches/sdk).
+extern "C" size_t ps5_heap_trim(void);
 #endif
 
 namespace ps5lm {
@@ -317,6 +319,24 @@ void StatsCollector::activity_end(int id, int status) {
     }
 }
 
+void memory_after_request(int id) {
+#ifdef __PROSPERO__
+    const double  trimmed = ps5_heap_trim() / 1048576.0;
+    const int64_t pool = sceKernelGetDirectMemorySize();
+    int64_t at = 0;
+    size_t  avail = 0;
+    sceKernelAvailableDirectMemorySize(0, pool, 2 * 1024 * 1024, &at, &avail);
+    struct ps5_heap_stats hs = {};
+    ps5_heap_stats(&hs);
+    std::printf("ps5lm-app: memory after request %d: pool free %.2f GiB, cpu heap %.2f GiB (peak %.2f, %u segments, "
+                "%u arenas, %llu to libc), %.0f MiB trimmed\n",
+                id, avail / kGiB, hs.mapped_bytes / kGiB, hs.peak_bytes / kGiB, hs.segments, hs.arenas,
+                hs.libc_fallbacks, trimmed);
+#else
+    (void) id;
+#endif
+}
+
 void StatsCollector::set_scratch(double gib) {
     std::lock_guard<std::mutex> lock(mutex_);
     live_.scratch_gib = gib;
@@ -359,6 +379,11 @@ void StatsCollector::run() {
 
         double pool = 0, free = 0, heap = 0;
 #ifdef __PROSPERO__
+        // An idle second gives the heap's free segments back: a request's last
+        // blocks are freed after its end hook (memory_after_request) has run.
+        if (!working) {
+            ps5_heap_trim();
+        }
         const int64_t pool_bytes = sceKernelGetDirectMemorySize();
         int64_t       at = 0;
         size_t        avail = 0;
